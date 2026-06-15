@@ -1,0 +1,14 @@
+# Commit only source (.py, .sh) and the self-contained result pages
+# (report.html, transcripts.html). Everything below is regenerable or raw.
+
+__pycache__/
+*.log
+
+# Run artifacts: embeddings, activations, SAE inputs, annotation caches,
+# per-neuron agent/GEPA records, intermediate result JSON. Rebuilt by the
+# numbered stage scripts; the HTML deliverables embed what they need.
+artifacts/
+artifacts_congress/
+
+# Local helper
+watch.log
