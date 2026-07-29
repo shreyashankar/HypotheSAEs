@@ -406,6 +406,95 @@ def neuron_table(data, table_id, n_test):
     return controls + f"<table class='cands' id='tbl_{table_id}'>{header}{rows}</table>"
 
 
+def blind_holdout_section(art, n_test, data):
+    """Stage 19/20 results: the agent re-run with its official metric moved to a
+    held-out corpus it can score but never read. Frozen-arm comparisons on the
+    same held-out sets come entirely from the annotation caches (no API calls)."""
+    recs = {}
+    for f in glob.glob(os.path.join(art, "agent_runs_holdout", "n*.json")):
+        r = load(f)
+        if r and "official_metrics" in r:
+            recs[r["neuron"]] = r
+    h_texts = load(os.path.join(art, "holdout_texts.json"))
+    a_path = os.path.join(art, "activations_holdout.npy")
+    if not recs or not h_texts or not os.path.exists(a_path):
+        return ""
+    hold_acts = np.load(a_path)
+
+    def frozen_holdout_f1(j, desc):
+        cache = load(os.path.join(art, f"annot_cache_holdout_n{j}.json")) or {}
+        tp, tn = test_indices(hold_acts, j, n_test)
+        idx = list(tp) + list(tn)
+        ev = [truncate_text(h_texts[i], 256) for i in idx]
+        try:
+            ann = np.array([cache[generate_cache_key(desc, t)] for t in ev])
+        except KeyError:
+            return None
+        labels = np.concatenate([np.ones(len(tp)), np.zeros(len(tn))])
+        return compute_metrics(ann, labels, hold_acts[idx, j])["f1"]
+
+    rows_per_neuron, sums = {}, {k: [] for k in ("baseline", "gepa", "agent",
+                                                 "blind_h", "blind_t", "frozen_train")}
+    for j in sorted(recs):
+        if j not in data:
+            continue
+        r = recs[j]
+        row = {"blind_h": r["official_metrics"]["f1"],
+               "blind_t": r.get("train_official_metrics", {}).get("f1"),
+               "blind_desc": r["final_description"], "spent": r.get("annotator_calls_spent")}
+        for mkey in ("baseline", "gepa", "agent"):
+            row[mkey] = (frozen_holdout_f1(j, data[j][mkey]["desc"])
+                         if mkey in data[j] else None)
+        row["agent_desc"] = data[j].get("agent", {}).get("desc", "")
+        rows_per_neuron[j] = row
+        if all(row[k] is not None for k in ("baseline", "gepa", "agent", "blind_t")):
+            for k in ("baseline", "gepa", "agent", "blind_h", "blind_t"):
+                sums[k].append(row[k])
+            sums["frozen_train"].append(data[j]["agent"]["f1"])
+    n = len(sums["blind_h"])
+    if not n:
+        return ""
+
+    def td(v):
+        return f"<td>{v:.3f}</td>" if v is not None else "<td class='muted'>–</td>"
+
+    arm_rows = (
+        f"<tr><td class='mname'>Baseline (frozen)</td><td>train examples, one shot</td>"
+        f"<td>{np.mean([data[j]['baseline']['f1'] for j in rows_per_neuron if j in data]):.3f}</td>"
+        f"<td>{np.mean(sums['baseline']):.3f}</td></tr>"
+        f"<tr><td class='mname'>GEPA (frozen)</td><td>train official set (errors readable)</td>"
+        f"<td>{np.mean([data[j]['gepa']['f1'] for j in rows_per_neuron if 'gepa' in data.get(j, {})]):.3f}</td>"
+        f"<td>{np.mean(sums['gepa']):.3f}</td></tr>"
+        f"<tr><td class='mname'>Agent (frozen)</td><td>train official set (corpus + errors readable)</td>"
+        f"<td>{np.mean(sums['frozen_train']):.3f}</td><td>{np.mean(sums['agent']):.3f}</td></tr>"
+        f"<tr style='background:#e8f0fe'><td class='mname'>Blind-holdout agent</td>"
+        f"<td>held-out set (scores only, unreadable)</td>"
+        f"<td>{np.mean(sums['blind_t']):.3f}</td><td><b>{np.mean(sums['blind_h']):.3f}</b></td></tr>")
+    detail = ""
+    for j, row in rows_per_neuron.items():
+        detail += (f"<tr><td>n{j}</td>{td(row['baseline'])}{td(row['gepa'])}"
+                   f"{td(row['agent'])}{td(row['blind_h'])}</tr>"
+                   f"<tr class='detail'><td colspan='5'><span class='muted'>frozen agent:</span> "
+                   f"{esc(row['agent_desc'])}<br><span class='muted'>blind-holdout agent:</span> "
+                   f"{esc(row['blind_desc'])}</td></tr>")
+    return (
+        "<h3>Blind-holdout agent: optimizing against scores it cannot read</h3>"
+        f"<p class='muted'>Stage 20 reruns the agent with one change: the official metric moves to a held-out "
+        f"corpus ({len(h_texts):,} docs outside the train corpus; official set = its top-K activating + K seeded "
+        "zero-activation docs). The agent can spend budget scoring this set but only ever receives aggregate "
+        "precision/recall/F1 — the texts, activations, and misclassified examples are unreadable, so nothing can "
+        "be memorized or enumerated; only properties that generalize score well. Sandbox, budget (1,000 calls), "
+        "and output constraints are identical to stage 10. The frozen arms are the original train-optimized "
+        f"descriptions re-scored on the same held-out sets (from cached annotations). n={n} neurons.</p>"
+        "<table class='cands'><tr><th>arm</th><th>optimized against</th>"
+        "<th>train-official F1</th><th>held-out F1</th></tr>"
+        f"{arm_rows}</table>"
+        "<details><summary>Per-neuron held-out F1 and both agents' descriptions</summary>"
+        "<table class='cands'><tr><th>neuron</th><th>baseline</th><th>GEPA</th>"
+        "<th>agent (frozen)</th><th>blind-holdout</th></tr>"
+        f"{detail}</table></details>")
+
+
 def evolution_blocks(data, top_k=2):
     done = [(j, d) for j, d in data.items() if "agent" in d and d["agent"]["all_scored"]]
     done.sort(key=lambda jd: -(jd[1]["agent"]["f1"] - jd[1]["baseline"]["f1"]))
@@ -587,6 +676,7 @@ def main():
                      "the residual is annotator sampling noise.</p>"
                      "<table class='cands'><tr><th>method</th><th>claimed mean F1</th>"
                      f"<th>fresh mean F1</th><th>gap</th></tr>{rows}</table>")
+        body += blind_holdout_section(art, n_test, data)
         ev = evolution_blocks(data)
         if ev:
             body += "<h3>Candidate evolution (largest improvements)</h3>" + ev

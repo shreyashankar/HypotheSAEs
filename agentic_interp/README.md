@@ -49,6 +49,29 @@ get "described" by enumerating their eval texts. The single-sentence-property
 constraint curbs this; where a neuron still can't be captured honestly (e.g.
 Congress n79 ≈ 0.77), that gap is a signal the neuron isn't a coherent concept.
 
+## Blind-holdout variant (stages 19–20)
+
+Does the agent's edge survive when the scored texts cannot be memorized? Stage
+20 reruns the agent with its official metric moved to a **held-out corpus it
+can score but never read** (2K unseen Yelp reviews / 20K unseen Congress
+chunks; official set = the pool's top-K activating + K seeded zero-activation
+docs). Scoring it returns aggregate P/R/F1 only — no texts, no misclassified
+examples. Sandbox, budget, and constraints are otherwise identical to stage 10.
+
+| held-out F1 (20 neurons) | baseline (frozen) | GEPA (frozen) | agent (frozen) | blind-holdout agent |
+|---|---|---|---|---|
+| Yelp | 0.625 | 0.775 | 0.816 | **0.860** |
+| Congress | 0.601 | 0.879 | 0.929 | **0.913** |
+
+"Frozen" = the train-optimized descriptions above, re-scored on the same
+held-out sets. The blind agent matches (Congress, −0.016) or beats (Yelp,
++0.044) the transferred train-optimized labels, and its own train↔held-out gap
+is ~0 (Congress 0.913/0.913; Yelp 0.888 train / 0.860 held-out) — the labels it
+writes are honest concepts, not eval-set artifacts. Cost of blindness: it
+scores lower on the readable train set (0.888/0.913 vs 0.962/0.942), since a
+full blind scoring costs 100–200 of the 1,000-call budget and small-variation
+hill-climbing is pointless without visible errors.
+
 ## Pipeline (numbered stages, run in order)
 
 Dataset is selected by the `AGENTIC_DATASET` env var (`yelp` default, or
@@ -63,6 +86,8 @@ Dataset is selected by the `AGENTIC_DATASET` env var (`yelp` default, or
 | `10_agent_v5.py` | the agent method (writes per-neuron records + transcripts) |
 | `11_gepa_v5.py` | vanilla GEPA (shardable via `GEPA_SHARD=i/n`) |
 | `14_verify.py` | integrity check: re-score every winner with the cache bypassed |
+| `19_prep_holdout.py` | build the held-out pool (texts + SAE activations) for the blind-holdout experiment |
+| `20_agent_holdout.py` | the blind-holdout agent (scores the held-out set, can never read it) |
 | `07_make_report.py` | build `report.html` |
 | `16_build_transcript_viewer.py` | build `transcripts.html` |
 
