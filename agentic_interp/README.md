@@ -39,19 +39,6 @@ Agent vs GEPA head-to-head: 17–2 (Yelp), 14–2 (Congress). Fresh-annotation
 re-scoring (cache bypassed) moved means by ≤0.004 — the scores are real, not
 caching/selection artifacts.
 
-**Generalization to held-out documents** (stage 18): the frozen descriptions were
-re-scored on docs no arm ever saw — outside the official set (GEPA's training
-signal) and outside the corpus the agent's sandbox could read. On Congress, whose
-held-out pool matches the train corpus size (20K), there is no meaningful gap:
-agent 0.942→0.929, GEPA 0.878→0.879, baseline 0.628→0.601. On Yelp the pool is
-5× smaller, which weakens the top-K positives and depresses every arm — including
-the baseline (0.755→0.625), which never optimized against its eval set — so the
-drop is pool shift, not memorization; excess drop over the baseline's is ≤0.02
-for both methods. Rankings are preserved everywhere. The one caveat: Yelp's
-threshold-matched scheme (positives activating above the training cutoff) shows
-larger excess drops (GEPA +0.12, agent +0.17), but averages only ~8 positives
-per neuron, so it is noisy.
-
 **What the sandbox buys:** corpus-wide probes crack lexical/disjunctive neurons
 that error-reflection alone stalls on — e.g. `grill`-substring, "Pat's vs Geno's
 cheesesteaks", multi-cuisine disjunctions, "business name starts with B". On
@@ -76,7 +63,6 @@ Dataset is selected by the `AGENTIC_DATASET` env var (`yelp` default, or
 | `10_agent_v5.py` | the agent method (writes per-neuron records + transcripts) |
 | `11_gepa_v5.py` | vanilla GEPA (shardable via `GEPA_SHARD=i/n`) |
 | `14_verify.py` | integrity check: re-score every winner with the cache bypassed |
-| `18_holdout_eval.py` | generalization check: re-score all three arms' frozen descriptions on held-out docs (never seen by any arm), sampled two ways (top-K and threshold-matched) |
 | `07_make_report.py` | build `report.html` |
 | `16_build_transcript_viewer.py` | build `transcripts.html` |
 

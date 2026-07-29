@@ -406,65 +406,6 @@ def neuron_table(data, table_id, n_test):
     return controls + f"<table class='cands' id='tbl_{table_id}'>{header}{rows}</table>"
 
 
-def holdout_section(art):
-    """Generalization table from 18_holdout_eval.py, if it has run for this dataset."""
-    ho = load(os.path.join(art, "holdout_results.json"))
-    if not ho:
-        return ""
-    neurons = ho["neurons"]
-    methods = [("baseline", "Baseline"), ("gepa", "GEPA"), ("agent", "Agent")]
-    schemes = [("topk", "top-K"), ("threshold", "threshold-matched")]
-
-    def cells(scheme, mkey):
-        ms = [n["schemes"][scheme]["methods"][mkey] for n in neurons.values()
-              if mkey in n["schemes"][scheme]["methods"]]
-        if not ms:
-            return "<td colspan='3' class='muted'>n/a</td>"
-        tr = np.mean([m["train_f1"] for m in ms])
-        hf = np.mean([m["holdout_f1"] for m in ms])
-        return f"<td>{tr:.3f}</td><td>{hf:.3f}</td><td>{tr - hf:+.3f}</td>"
-
-    rows = "".join(f"<tr><td class='mname'>{label}</td>"
-                   + "".join(cells(skey, mkey) for skey, _ in schemes)
-                   + "</tr>"
-                   for mkey, label in methods)
-    npos = {skey: [n["schemes"][skey]["n_pos"] for n in neurons.values()] for skey, _ in schemes}
-    detail_rows = ""
-    for j in sorted(neurons, key=int):
-        n = neurons[j]
-        detail_rows += f"<tr><td>n{j}</td><td>{n['schemes']['topk']['n_pos']} / {n['schemes']['threshold']['n_pos']}</td>"
-        for mkey, _ in methods:
-            parts = []
-            for skey, _ in schemes:
-                m = n["schemes"][skey]["methods"].get(mkey)
-                parts.append(f"{m['holdout_f1']:.2f}" if m else "–")
-            m0 = (n["schemes"]["topk"]["methods"].get(mkey)
-                  or n["schemes"]["threshold"]["methods"].get(mkey))
-            train = f"{m0['train_f1']:.2f}" if m0 else "–"
-            detail_rows += f"<td>{train} &rarr; {parts[0]} / {parts[1]}</td>"
-        detail_rows += "</tr>"
-    return (
-        "<h3>Generalization: held-out documents</h3>"
-        f"<p class='muted'>Final descriptions frozen, then re-scored on a pool of {ho['pool_size']:,} "
-        "held-out documents that no arm ever saw: outside the official set (GEPA's training signal) and outside "
-        "the corpus the agent's sandbox could read. Held-out activations come from the same trained SAE. "
-        f"Positives per neuron (&le;{ho['n_per_class']}): <b>top-K</b> takes the pool's top activating docs "
-        "(mirrors the official protocol, but a smaller pool means systematically weaker activations); "
-        "<b>threshold-matched</b> takes only docs activating above the training official set's minimum positive "
-        f"activation (mean n: top-K {np.mean(npos['topk']):.0f}, threshold {np.mean(npos['threshold']):.0f}). "
-        f"Negatives: {ho['n_per_class']} random zero-activation held-out docs, shared across schemes. "
-        "The baseline never optimized against its eval set, so its drop is the noise floor.</p>"
-        "<table class='cands'><tr><th rowspan='2'>method</th>"
-        "<th colspan='3'>top-K positives</th><th colspan='3'>threshold-matched positives</th></tr>"
-        "<tr><th>train F1</th><th>held-out F1</th><th>drop</th>"
-        "<th>train F1</th><th>held-out F1</th><th>drop</th></tr>"
-        f"{rows}</table>"
-        "<details><summary>Per-neuron held-out F1 (train &rarr; top-K / threshold)</summary>"
-        "<table class='cands'><tr><th>neuron</th><th>n_pos<br>topk/thr</th>"
-        "<th>baseline</th><th>GEPA</th><th>agent</th></tr>"
-        f"{detail_rows}</table></details>")
-
-
 def evolution_blocks(data, top_k=2):
     done = [(j, d) for j, d in data.items() if "agent" in d and d["agent"]["all_scored"]]
     done.sort(key=lambda jd: -(jd[1]["agent"]["f1"] - jd[1]["baseline"]["f1"]))
@@ -646,7 +587,6 @@ def main():
                      "the residual is annotator sampling noise.</p>"
                      "<table class='cands'><tr><th>method</th><th>claimed mean F1</th>"
                      f"<th>fresh mean F1</th><th>gap</th></tr>{rows}</table>")
-        body += holdout_section(art)
         ev = evolution_blocks(data)
         if ev:
             body += "<h3>Candidate evolution (largest improvements)</h3>" + ev
