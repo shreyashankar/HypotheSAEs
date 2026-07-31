@@ -459,15 +459,15 @@ def blind_holdout_section(art, n_test, data):
         return f"<td>{v:.3f}</td>" if v is not None else "<td class='muted'>–</td>"
 
     fig, ax = plt.subplots(figsize=(6.5, 2.6))
-    labels = [("baseline", "Baseline (frozen)"), ("gepa", "GEPA (frozen)"),
-              ("agent", "Agent (frozen)"), ("blind_h", "Blind-holdout agent")]
+    labels = [("baseline", "Baseline"), ("gepa", "GEPA"),
+              ("agent", "Agent"), ("blind_h", "Agent with held-out scoring")]
     vals = [np.mean(sums[k]) for k, _ in labels]
     cols = [COLORS["baseline"], COLORS["gepa"], COLORS["agent"], "#1565c0"]
     bars = ax.barh(range(4), vals, color=cols)
     ax.set_yticks(range(4))
     ax.set_yticklabels([f"{lbl}  (n={n})" for _, lbl in labels], fontsize=8.5)
     ax.invert_yaxis(); ax.set_xlim(0, 1.02)
-    ax.set_title("Mean HELD-OUT F1 — scored on unseen documents", fontsize=11)
+    ax.set_title("Mean F1 on held-out documents", fontsize=11)
     for b, v in zip(bars, vals):
         ax.text(v + 0.01, b.get_y() + b.get_height() / 2, f"{v:.3f}", va="center", fontsize=8.5)
     ax.spines[["top", "right"]].set_visible(False)
@@ -475,43 +475,48 @@ def blind_holdout_section(art, n_test, data):
     holdout_bars = b64fig(fig)
 
     arm_rows = (
-        f"<tr><td class='mname'>Baseline (frozen)</td><td>train examples, one shot</td>"
+        f"<tr><td class='mname'>Baseline</td><td>one LLM call over training examples</td>"
         f"<td>{np.mean([data[j]['baseline']['f1'] for j in rows_per_neuron if j in data]):.3f}</td>"
         f"<td>{np.mean(sums['baseline']):.3f}</td></tr>"
-        f"<tr><td class='mname'>GEPA (frozen)</td><td>train official set (errors readable)</td>"
+        f"<tr><td class='mname'>GEPA</td><td>iterated on the training evaluation set and read its "
+        f"misclassified texts</td>"
         f"<td>{np.mean([data[j]['gepa']['f1'] for j in rows_per_neuron if 'gepa' in data.get(j, {})]):.3f}</td>"
         f"<td>{np.mean(sums['gepa']):.3f}</td></tr>"
-        f"<tr><td class='mname'>Agent (frozen)</td><td>train official set (corpus + errors readable)</td>"
+        f"<tr><td class='mname'>Agent</td><td>iterated on the training evaluation set and could read "
+        f"the whole training corpus</td>"
         f"<td>{np.mean(sums['frozen_train']):.3f}</td><td>{np.mean(sums['agent']):.3f}</td></tr>"
-        f"<tr style='background:#e8f0fe'><td class='mname'>Blind-holdout agent</td>"
-        f"<td>held-out set (scores only, unreadable)</td>"
+        f"<tr style='background:#e8f0fe'><td class='mname'>Agent with held-out scoring</td>"
+        f"<td>iterated on the held-out score alone and could never read the held-out documents</td>"
         f"<td>{np.mean(sums['blind_t']):.3f}</td><td><b>{np.mean(sums['blind_h']):.3f}</b></td></tr>")
     detail = ""
     for j, row in rows_per_neuron.items():
         detail += (f"<tr><td>n{j}</td>{td(row['baseline'])}{td(row['gepa'])}"
                    f"{td(row['agent'])}{td(row['blind_h'])}</tr>"
-                   f"<tr class='detail'><td colspan='5'><span class='muted'>frozen agent:</span> "
-                   f"{esc(row['agent_desc'])}<br><span class='muted'>blind-holdout agent:</span> "
+                   f"<tr class='detail'><td colspan='5'><span class='muted'>agent:</span> "
+                   f"{esc(row['agent_desc'])}<br><span class='muted'>agent with held-out scoring:</span> "
                    f"{esc(row['blind_desc'])}</td></tr>")
+    n_per_class = n_test // 2
     return (
-        "<h3 style='background:#e8f0fe;padding:6px 10px;border-radius:6px'>Held-out evaluation: "
-        "F1 on documents no method ever saw</h3>"
+        "<h3 style='background:#e8f0fe;padding:6px 10px;border-radius:6px'>Scores on held-out documents</h3>"
         f"<img src='data:image/png;base64,{holdout_bars}'/>"
-        f"<p class='muted'>Everything above this section is scored on the train-corpus official set. Here, every "
-        f"arm is scored on a HELD-OUT official set instead: the top-K activating + K seeded zero-activation docs "
-        f"of a {len(h_texts):,}-document pool outside the train corpus. "
-        "The frozen arms are the train-optimized descriptions from above, re-scored here (from cached "
-        "annotations). The blind-holdout agent (stage 20) is a rerun of the agent with one change: its official "
-        "metric IS this held-out set — it can spend budget scoring it but only ever receives aggregate "
-        "precision/recall/F1 — the texts, activations, and misclassified examples are unreadable, so nothing can "
-        "be memorized or enumerated; only properties that generalize score well. Sandbox, budget (1,000 calls), "
-        f"and output constraints are identical to stage 10. n={n} neurons.</p>"
-        "<table class='cands'><tr><th>arm</th><th>optimized against</th>"
-        "<th>train-official F1</th><th>held-out F1</th></tr>"
+        f"<p class='muted'>Everything else on this page is scored on an evaluation set drawn from the training "
+        f"corpus, which the methods could read while optimizing. The table below instead scores every method on "
+        f"documents that no method ever saw. The held-out evaluation set for each neuron contains the "
+        f"{n_per_class} held-out documents where the neuron activates most strongly, plus {n_per_class} random "
+        f"held-out documents where it does not activate at all, drawn from a pool of {len(h_texts):,} documents "
+        f"outside the training corpus.</p>"
+        f"<p class='muted'>The first three rows take the descriptions reported above and score them again on the "
+        f"held-out set. The last row is a new run of the agent whose official score came from the held-out set "
+        f"during optimization. That agent could ask for the held-out score of any candidate description, but it "
+        f"only ever received the overall precision, recall, and F1. It could not read the held-out texts or see "
+        f"which ones were misclassified, so a description could only score well by generalizing. Its sandbox, "
+        f"budget (1,000 annotator calls), and output constraints are unchanged. n={n} neurons.</p>"
+        "<table class='cands'><tr><th>method</th><th>how it was optimized</th>"
+        "<th>F1 on the training set</th><th>F1 on the held-out set</th></tr>"
         f"{arm_rows}</table>"
-        "<details><summary>Per-neuron held-out F1 and both agents' descriptions</summary>"
+        "<details><summary>Per-neuron held-out F1 and each agent's description</summary>"
         "<table class='cands'><tr><th>neuron</th><th>baseline</th><th>GEPA</th>"
-        "<th>agent (frozen)</th><th>blind-holdout</th></tr>"
+        "<th>agent</th><th>agent with held-out scoring</th></tr>"
         f"{detail}</table></details>")
 
 
@@ -652,9 +657,9 @@ optimization budget (1,000 annotator calls per neuron; one call = one text &time
 output constraint: a single-sentence, objectively checkable property — no annotator directives, no multi-step
 instructions. Annotator: gpt-5-mini throughout; it is the only model that ever produces the yes/no judgments
 behind any score.</p>
-<p><b>Plus a fourth arm:</b> the <b>blind-holdout agent</b> — the same agent, but its official metric is a
-held-out corpus it can score and never read. Each dataset section below opens with the held-out evaluation
-(blue box), where all four arms are compared on documents none of them ever saw.</p>
+<p><b>A fourth method</b> is the same agent with one change. Its official score comes from a held-out set of
+documents that it can score but never read. Each dataset section below opens with a highlighted table that
+compares all four methods on those held-out documents.</p>
 """
 
 
