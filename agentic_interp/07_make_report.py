@@ -458,6 +458,22 @@ def blind_holdout_section(art, n_test, data):
     def td(v):
         return f"<td>{v:.3f}</td>" if v is not None else "<td class='muted'>–</td>"
 
+    fig, ax = plt.subplots(figsize=(6.5, 2.6))
+    labels = [("baseline", "Baseline (frozen)"), ("gepa", "GEPA (frozen)"),
+              ("agent", "Agent (frozen)"), ("blind_h", "Blind-holdout agent")]
+    vals = [np.mean(sums[k]) for k, _ in labels]
+    cols = [COLORS["baseline"], COLORS["gepa"], COLORS["agent"], "#1565c0"]
+    bars = ax.barh(range(4), vals, color=cols)
+    ax.set_yticks(range(4))
+    ax.set_yticklabels([f"{lbl}  (n={n})" for _, lbl in labels], fontsize=8.5)
+    ax.invert_yaxis(); ax.set_xlim(0, 1.02)
+    ax.set_title("Mean HELD-OUT F1 — scored on unseen documents", fontsize=11)
+    for b, v in zip(bars, vals):
+        ax.text(v + 0.01, b.get_y() + b.get_height() / 2, f"{v:.3f}", va="center", fontsize=8.5)
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    holdout_bars = b64fig(fig)
+
     arm_rows = (
         f"<tr><td class='mname'>Baseline (frozen)</td><td>train examples, one shot</td>"
         f"<td>{np.mean([data[j]['baseline']['f1'] for j in rows_per_neuron if j in data]):.3f}</td>"
@@ -478,14 +494,18 @@ def blind_holdout_section(art, n_test, data):
                    f"{esc(row['agent_desc'])}<br><span class='muted'>blind-holdout agent:</span> "
                    f"{esc(row['blind_desc'])}</td></tr>")
     return (
-        "<h3>Blind-holdout agent: optimizing against scores it cannot read</h3>"
-        f"<p class='muted'>Stage 20 reruns the agent with one change: the official metric moves to a held-out "
-        f"corpus ({len(h_texts):,} docs outside the train corpus; official set = its top-K activating + K seeded "
-        "zero-activation docs). The agent can spend budget scoring this set but only ever receives aggregate "
+        "<h3 style='background:#e8f0fe;padding:6px 10px;border-radius:6px'>Held-out evaluation: "
+        "F1 on documents no method ever saw</h3>"
+        f"<img src='data:image/png;base64,{holdout_bars}'/>"
+        f"<p class='muted'>Everything above this section is scored on the train-corpus official set. Here, every "
+        f"arm is scored on a HELD-OUT official set instead: the top-K activating + K seeded zero-activation docs "
+        f"of a {len(h_texts):,}-document pool outside the train corpus. "
+        "The frozen arms are the train-optimized descriptions from above, re-scored here (from cached "
+        "annotations). The blind-holdout agent (stage 20) is a rerun of the agent with one change: its official "
+        "metric IS this held-out set — it can spend budget scoring it but only ever receives aggregate "
         "precision/recall/F1 — the texts, activations, and misclassified examples are unreadable, so nothing can "
         "be memorized or enumerated; only properties that generalize score well. Sandbox, budget (1,000 calls), "
-        "and output constraints are identical to stage 10. The frozen arms are the original train-optimized "
-        f"descriptions re-scored on the same held-out sets (from cached annotations). n={n} neurons.</p>"
+        f"and output constraints are identical to stage 10. n={n} neurons.</p>"
         "<table class='cands'><tr><th>arm</th><th>optimized against</th>"
         "<th>train-official F1</th><th>held-out F1</th></tr>"
         f"{arm_rows}</table>"
@@ -632,6 +652,9 @@ optimization budget (1,000 annotator calls per neuron; one call = one text &time
 output constraint: a single-sentence, objectively checkable property — no annotator directives, no multi-step
 instructions. Annotator: gpt-5-mini throughout; it is the only model that ever produces the yes/no judgments
 behind any score.</p>
+<p><b>Plus a fourth arm:</b> the <b>blind-holdout agent</b> — the same agent, but its official metric is a
+held-out corpus it can score and never read. Each dataset section below opens with the held-out evaluation
+(blue box), where all four arms are compared on documents none of them ever saw.</p>
 """
 
 
@@ -651,6 +674,7 @@ def main():
                  f"GEPA {n_gepa}/{len(data)} neurons. Rows marked … are still running; "
                  f"this page regenerates automatically as neurons finish (last build {stamp}).</p>")
         body += f"<img src='data:image/png;base64,{bars_fig(data, name + ' — method comparison')}'/>"
+        body += blind_holdout_section(art, n_test, data)
         svg = cost_accuracy_svg(data, n_test, f"{name}: cost vs F1 (hover a point for the neuron)", name.lower())
         if svg:
             body += svg
@@ -676,7 +700,6 @@ def main():
                      "the residual is annotator sampling noise.</p>"
                      "<table class='cands'><tr><th>method</th><th>claimed mean F1</th>"
                      f"<th>fresh mean F1</th><th>gap</th></tr>{rows}</table>")
-        body += blind_holdout_section(art, n_test, data)
         ev = evolution_blocks(data)
         if ev:
             body += "<h3>Candidate evolution (largest improvements)</h3>" + ev
