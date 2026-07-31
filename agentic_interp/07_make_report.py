@@ -46,7 +46,7 @@ def method_cost(d, mkey, n_test):
     """Return (cost_string, dollars) for one neuron+method."""
     if mkey == "baseline":
         return f"~${n_test * ANNOT_COST + 0.01:.2f}", n_test * ANNOT_COST + 0.01
-    if mkey == "agent":
+    if mkey in ("agent", "agent_holdout"):
         ann = d[mkey].get("spent", 0) * ANNOT_COST
         u = d[mkey].get("llm_usage")
         if u:
@@ -154,6 +154,20 @@ def collect(art, n_test):
             if os.path.exists(os.path.join(art, agent_dir, f"transcript_n{j}.json")):
                 dskey = "yelp" if os.path.basename(art) == "artifacts" else "congress"
                 data[j]["agent"]["transcript"] = f"transcripts.html#{dskey}_agent-n{j}"
+    for f in glob.glob(os.path.join(art, "agent_runs_holdout", "n*.json")):
+        rec = load(f)
+        if not rec or rec.get("neuron") not in data:
+            continue
+        j = rec["neuron"]
+        data[j]["agent_holdout"] = {
+            "f1": rec["official_metrics"]["f1"],
+            "train_f1": rec.get("train_official_metrics", {}).get("f1"),
+            "desc": rec["final_description"],
+            "spent": rec.get("annotator_calls_spent", 0),
+            "llm_usage": rec.get("llm_usage")}
+        if os.path.exists(os.path.join(art, "agent_runs_holdout", f"transcript_n{j}.json")):
+            dskey = "yelp" if os.path.basename(art) == "artifacts" else "congress"
+            data[j]["agent_holdout"]["transcript"] = f"transcripts.html#{dskey}_agent_holdout-n{j}"
     texts_recs = load(os.path.join(art, "train_texts.json")) or []
     all_texts = [r["text"] for r in texts_recs]
     for f in glob.glob(os.path.join(art, GEPA_RUN_DIRNAME, "n*.json")):
@@ -376,26 +390,38 @@ def neuron_table(data, table_id, n_test):
                  f"<td>{d['n_pos_corpus']}</td>"
                  f"<td>{d['n_off_pos']}+ / {d['n_off_neg']}&minus;</td>"
                  f"<td>{d['n_midlow']}</td>"
-                 f"<td>{fmt(d, 'baseline')}</td><td>{fmt(d, 'gepa')}</td><td>{fmt(d, 'agent')}</td></tr>")
+                 f"<td>{fmt(d, 'baseline')}</td><td>{fmt(d, 'gepa')}</td><td>{fmt(d, 'agent')}</td>"
+                 f"<td>{fmt(d, 'agent_holdout')}</td></tr>")
         detail = "<table class='inner'>"
-        for mkey, mlabel in [("baseline", "Baseline"), ("gepa", "GEPA"), ("agent", "Agent")]:
+        for mkey, mlabel in [("baseline", "Baseline"), ("gepa", "GEPA"), ("agent", "Agent"),
+                             ("agent_holdout", "Agent with<br>held-out scoring")]:
             if mkey in d:
                 m = d[mkey]
                 link = (f" · <a href='{m['transcript']}' target='_blank'>full transcript</a>"
                         if m.get("transcript") else "")
                 cost_str, _ = method_cost(d, mkey, n_test)
-                detail += (f"<tr><td class='mname'>{mlabel}<br><span class='muted'>F1 {m['f1']:.3f}"
+                if mkey == "agent_holdout":
+                    tf = m.get("train_f1")
+                    f1_str = (f"held-out F1 {m['f1']:.3f}"
+                              + (f" · training-set F1 {tf:.3f}" if tf is not None else ""))
+                else:
+                    f1_str = f"F1 {m['f1']:.3f}"
+                detail += (f"<tr><td class='mname'>{mlabel}<br><span class='muted'>{f1_str}"
                            f"{link}<br>cost {cost_str}</span></td><td class='desc'>{esc(m['desc'])}</td></tr>")
             else:
                 detail += f"<tr><td class='mname'>{mlabel}</td><td class='muted'>(still running)</td></tr>"
         detail += "</table>"
-        rows += f"<tr id='{rid}' class='detail' style='display:none'><td colspan='7'>{detail}</td></tr>"
+        rows += f"<tr id='{rid}' class='detail' style='display:none'><td colspan='8'>{detail}</td></tr>"
     header = ("<tr><th>neuron</th><th title='texts with activation>0 in the whole corpus'># act&gt;0<br>(corpus)</th>"
               "<th title='official evaluation set composition'>official set</th>"
               "<th title='firing texts excluded from evaluation (below the top-N cutoff)'># firing texts<br>outside official set</th>"
-              "<th>baseline F1</th><th>GEPA F1</th><th>agent F1</th></tr>")
-    controls = (f"<p class='muted'>Click any row to see all three methods' descriptions and the agent transcript. "
-                f"F1 = 1.0 means perfect discrimination on the official set. Sort by: "
+              "<th>baseline F1</th><th>GEPA F1</th><th>agent F1</th>"
+              "<th title='the agent whose official score came from the held-out set; this column is its F1 on that held-out set'>"
+              "agent w/ held-out<br>scoring (held-out F1)</th></tr>")
+    controls = (f"<p class='muted'>Click any row to see every method's description and the agent transcripts. "
+                f"The baseline, GEPA, and agent F1 columns are scored on the training evaluation set. The last "
+                f"column is the agent with held-out scoring, and its F1 is measured on the held-out set. "
+                f"F1 = 1.0 means perfect discrimination. Sort by: "
                 f"<select id='sk_{table_id}' onchange=\"resort('{table_id}')\">"
                 f"<option value='ab'>agent − baseline</option>"
                 f"<option value='ag'>agent − GEPA</option>"
@@ -455,9 +481,6 @@ def blind_holdout_section(art, n_test, data):
     if not n:
         return ""
 
-    def td(v):
-        return f"<td>{v:.3f}</td>" if v is not None else "<td class='muted'>–</td>"
-
     fig, ax = plt.subplots(figsize=(6.5, 2.6))
     labels = [("baseline", "Baseline"), ("gepa", "GEPA"),
               ("agent", "Agent"), ("blind_h", "Agent with held-out scoring")]
@@ -488,13 +511,6 @@ def blind_holdout_section(art, n_test, data):
         f"<tr style='background:#e8f0fe'><td class='mname'>Agent with held-out scoring</td>"
         f"<td>iterated on the held-out score alone and could never read the held-out documents</td>"
         f"<td>{np.mean(sums['blind_t']):.3f}</td><td><b>{np.mean(sums['blind_h']):.3f}</b></td></tr>")
-    detail = ""
-    for j, row in rows_per_neuron.items():
-        detail += (f"<tr><td>n{j}</td>{td(row['baseline'])}{td(row['gepa'])}"
-                   f"{td(row['agent'])}{td(row['blind_h'])}</tr>"
-                   f"<tr class='detail'><td colspan='5'><span class='muted'>agent:</span> "
-                   f"{esc(row['agent_desc'])}<br><span class='muted'>agent with held-out scoring:</span> "
-                   f"{esc(row['blind_desc'])}</td></tr>")
     n_per_class = n_test // 2
     return (
         "<h3 style='background:#e8f0fe;padding:6px 10px;border-radius:6px'>Scores on held-out documents</h3>"
@@ -514,10 +530,8 @@ def blind_holdout_section(art, n_test, data):
         "<table class='cands'><tr><th>method</th><th>how it was optimized</th>"
         "<th>F1 on the training set</th><th>F1 on the held-out set</th></tr>"
         f"{arm_rows}</table>"
-        "<details><summary>Per-neuron held-out F1 and each agent's description</summary>"
-        "<table class='cands'><tr><th>neuron</th><th>baseline</th><th>GEPA</th>"
-        "<th>agent</th><th>agent with held-out scoring</th></tr>"
-        f"{detail}</table></details>")
+        "<p class='muted'>Per-neuron scores, every description, and the transcripts are in the neuron table "
+        "further down this section (last column and expanded rows).</p>")
 
 
 def evolution_blocks(data, top_k=2):

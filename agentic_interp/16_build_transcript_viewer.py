@@ -45,6 +45,14 @@ def collect_all():
                     except Exception as e:
                         print(f"  (no system prompt for {ds} n{j}: {e})")
                 data[key][j] = rec
+        hold_dir = os.path.join(art, "agent_runs_holdout")
+        if os.path.isdir(hold_dir):
+            key = f"{ds}_agent_holdout"
+            data[key] = {}
+            # Stage 20 always embeds the system prompt, so no rebuild fallback.
+            for p in glob.glob(os.path.join(hold_dir, "transcript_n*.json")):
+                j = re.search(r"transcript_n(\d+)\.json", p).group(1)
+                data[key][j] = json.load(open(p))
         gepa_dir = os.path.join(art, GEPA_RUN_DIRNAME)
         if os.path.isdir(gepa_dir):
             key = f"{ds}_gepa"
@@ -99,7 +107,9 @@ table.scores th { background: #f4f6f8; }
 const DATA = __DATA__;
 const ART = {
   yelp_agent: 'artifacts/agent_runs_strict', yelp_gepa: 'artifacts/gepa_runs_v5',
-  congress_agent: 'artifacts_congress/agent_runs_strict', congress_gepa: 'artifacts_congress/gepa_runs_v5'
+  yelp_agent_holdout: 'artifacts/agent_runs_holdout',
+  congress_agent: 'artifacts_congress/agent_runs_strict', congress_gepa: 'artifacts_congress/gepa_runs_v5',
+  congress_agent_holdout: 'artifacts_congress/agent_runs_holdout'
 };
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
@@ -253,7 +263,8 @@ const ENV = {
   congress: {n: '20,000', unit: 'Congressional speech chunks', ntest: '100 + 100'}
 };
 function envCard(ds, seq) {
-  const e = ENV[ds.replace('_agent', '').replace('_gepa', '')] || {n: '?', unit: 'texts', ntest: '?'};
+  const e = ENV[ds.replace('_agent_holdout', '').replace('_agent', '').replace('_gepa', '')] || {n: '?', unit: 'texts', ntest: '?'};
+  const isHold = ds.includes('agent_holdout');
   const nPy = seq.filter(s => s.cat === 'code').length;
   const nSc = seq.filter(s => s.cat === 'scall').length;
   const pre = [
@@ -263,18 +274,21 @@ function envCard(ds, seq) {
     ['emb', `float[${e.n} × 1536]`, 'unit-norm text embeddings'],
     ['stars', `float[${e.n}]`, 'target variable (rating / party)'],
     ['top', `int[${e.n}]`, 'text indices sorted by activation, descending'],
-    ['official_pos / official_neg', 'list[int]', `official eval set indices (${e.ntest})`],
     ['show(i, words=120)', 'function', 'print text i, truncated'],
     ['np', 'module', 'numpy']
   ];
+  if (!isHold) pre.splice(6, 0, ['official_pos / official_neg', 'list[int]', `official eval set indices (${e.ntest})`]);
   let rows = pre.map(r => `<tr><td><code>${r[0]}</code></td><td class='meta'>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
+  const scorer = isHold
+    ? `<code>indices=None</code> scores the held-out evaluation set (${e.ntest}) and returns only overall precision, recall, and F1; the held-out documents are not readable. Custom indices score any self-picked sample from the readable corpus (labels = activation&gt;0), with misclassified indices returned. `
+    : `<code>indices=None</code> scores the full official set (the reported metric); custom indices score any self-picked sample (labels = activation&gt;0). `;
   return `<details class='block toolcall' style='margin-top:0.8em'><summary style='cursor:pointer'>` +
     `<span class='lbl' style='display:inline'>agent environment — 2 tools + preloaded sandbox</span>` +
     `<span class='meta'> · used ${nPy}× run_python, ${nSc}× score_descriptions</span></summary>` +
     `<div style='margin-top:0.5em'><b style='color:#4f8cd6'>run_python(code)</b> — persistent Python sandbox; state survives across calls. Preloaded variables:` +
     `<table class='scores' style='margin:0.4em 0'><tr><th>name</th><th>type / shape</th><th>contents</th></tr>${rows}</table>` +
     `<b style='color:#d81b60'>score_descriptions(descriptions, indices=None)</b> — the official annotator (gpt-5-mini, repo prompt). ` +
-    `<code>indices=None</code> scores the full official set (the reported metric); custom indices score any self-picked sample (labels = activation&gt;0). ` +
+    scorer +
     `Budget: 1,000 annotator calls; one call = one text × one description; cached pairs free; max 5 descriptions per call.</div></details>`;
 }
 function render(ds, nr) {
@@ -307,7 +321,8 @@ function render(ds, nr) {
       try { const a = JSON.parse(txt);
         if (name === 'run_python') inner = `<pre>${esc(a.code||txt)}</pre>`;
         else if (name === 'score_descriptions') {
-          const tag = a.indices ? `custom sample (${a.indices.length} texts)` : 'official set';
+          const tag = a.indices ? `custom sample (${a.indices.length} texts)`
+                                : (ds.includes('agent_holdout') ? 'held-out evaluation set (not readable)' : 'official set');
           inner = `<div class='meta'>${tag}</div><ul>` + (a.descriptions||[]).map(d => `<li>${esc(d)}</li>`).join('') + '</ul>';
         }
       } catch(e) { if (name === 'run_python') inner = `<pre>${esc(txt)}</pre>`;
